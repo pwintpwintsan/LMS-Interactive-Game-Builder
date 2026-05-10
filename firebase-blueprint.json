@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Game Project",
+      "description": "A game created by a user",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "scenes": { 
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "ownerId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "scenes", "ownerId", "createdAt", "updatedAt"]
+    },
+    "Score": {
+      "title": "Play Session Score",
+      "description": "The result of a play session",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "sceneId": { "type": "string" },
+        "totalPairs": { "type": "number" },
+        "correctPairs": { "type": "number" },
+        "timeSpent": { "type": "number" },
+        "userId": { "type": "string" },
+        "playedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["projectId", "sceneId", "totalPairs", "correctPairs", "timeSpent", "playedAt"]
+    }
+  },
+  "firestore": {
+    "projects": {
+      "schema": "Project",
+      "description": "Collection of game projects"
+    },
+    "scores": {
+      "schema": "Score",
+      "description": "Collection of play session results"
+    }
+  }
+}

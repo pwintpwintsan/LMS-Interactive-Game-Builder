@@ -1,0 +1,69 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    // --- Validation Helpers ---
+    function isValidProject(data) {
+      return data.keys().hasAll(['name', 'scenes', 'ownerId', 'createdAt', 'updatedAt'])
+        && data.keys().size() == 5
+        && data.name is string && data.name.size() <= 100
+        && data.scenes is list
+        && data.ownerId == request.auth.uid
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function isValidScore(data) {
+      return data.keys().hasAll(['projectId', 'sceneId', 'totalPairs', 'correctPairs', 'timeSpent', 'userId', 'playedAt'])
+        && data.keys().size() == 7
+        && data.projectId is string
+        && data.sceneId is string
+        && data.totalPairs is number && data.totalPairs >= 0
+        && data.correctPairs is number && data.correctPairs >= 0 && data.correctPairs <= data.totalPairs
+        && data.timeSpent is number && data.timeSpent >= 0
+        && (data.userId == null || (isSignedIn() && data.userId == request.auth.uid))
+        && data.playedAt == request.time;
+    }
+
+    // --- Collection Rules ---
+
+    match /projects/{projectId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      
+      allow create: if isSignedIn() 
+        && isValidId(projectId) 
+        && isValidProject(incoming());
+      
+      allow update: if isSignedIn() 
+        && isOwner(existing().ownerId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'scenes', 'updatedAt'])
+        );
+        
+      allow delete: if isSignedIn() && isOwner(existing().ownerId);
+    }
+
+    match /scores/{scoreId} {
+      allow create: if isValidId(scoreId)
+        && isValidScore(incoming());
+      
+      allow get: if isSignedIn() && (isOwner(resource.data.userId) || (resource.data.projectId != null && exists(/databases/$(database)/documents/projects/$(resource.data.projectId)) && isOwner(get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data.ownerId)));
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
