@@ -1,9 +1,9 @@
-export type WidgetType = 'background' | 'character' | 'audio' | 'text' | 'button' | 'image' | 'video' | 'quiz' | 'multiple-choice' | 'fill-in-the-blank' | 'checkbox' | 'numberbox' | 'shape';
+export type WidgetType = 'background' | 'character' | 'audio' | 'text' | 'button' | 'image' | 'video' | 'quiz' | 'multiple-choice' | 'sequencing' | 'fill-in-the-blank' | 'checkbox' | 'numberbox' | 'shape';
 
 export interface Interaction {
   type: 'click' | 'double-click' | 'drag' | 'hover';
   targetId?: string;
-  action: 'success' | 'fail' | 'navigate' | 'play-sound' | 'animate' | 'next-scene' | 'previous-scene' | 'submit-test';
+  action: 'success' | 'fail' | 'navigate' | 'play-sound' | 'animate' | 'next-scene' | 'submit-test';
   payload?: any;
 }
 
@@ -113,15 +113,6 @@ export interface Scene {
   isFinalPage?: boolean;
 }
 
-export interface Project {
-  id: string;
-  name: string;
-  scenes: Scene[];
-  ownerId: string;
-  createdAt: any;
-  updatedAt: any;
-}
-
 export interface EditorState {
   scenes: Scene[];
   currentSceneId: string;
@@ -130,6 +121,4 @@ export interface EditorState {
   zoom: number;
   viewMode: 'desktop' | 'tablet' | 'mobile';
   isPlaying: boolean;
-  projectId?: string;
-  projectName: string;
 }

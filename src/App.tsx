@@ -32,7 +32,6 @@ import {
   Download,
   Share2,
   LogIn,
-  LogOut,
   ArrowLeftRight,
   CheckSquare,
   Hash,
@@ -48,26 +47,14 @@ import {
   ChevronUp,
   ChevronsUp,
   ChevronsDown,
-  Star,
-  Target,
-  Trophy,
-  Rocket,
-  Shield,
-  Layout,
-  Settings2,
-  Sparkles,
+  Upload,
   ChevronLeft,
   RefreshCw,
   RotateCw,
   Square,
   Circle,
   RectangleHorizontal,
-  Minus,
-  Upload,
-  Clock,
-  User as UserIcon,
-  PlusCircle,
-  FolderOpen
+  Minus
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -76,25 +63,10 @@ import {
   GameElement, 
   WidgetType, 
   Interaction, 
-  Choice,
-  Project 
+  Choice 
 } from './types';
 import { db, auth, signInWithGoogle, serverTimestamp } from './firebase';
-import { 
-  collection, 
-  addDoc, 
-  setDoc,
-  doc, 
-  getDoc,
-  getDocs,
-  query,
-  where,
-  orderBy,
-  deleteDoc,
-  onSnapshot,
-  getDocFromServer 
-} from 'firebase/firestore';
-import { onAuthStateChanged, signOut, User } from 'firebase/auth';
+import { collection, addDoc, doc, getDocFromServer } from 'firebase/firestore';
 
 // --- Firebase Error Handler ---
 enum OperationType {
@@ -166,13 +138,10 @@ const UI_ELEMENTS: { type: WidgetType; name: string; icon: any }[] = [
   { type: 'button', name: 'Action Button', icon: MousePointer2 },
   { type: 'image', name: 'Decoration', icon: ImageIcon },
   { type: 'video', name: 'Video Content', icon: Video },
+  { type: 'quiz', name: 'Matching Pair', icon: Grid3X3 },
+  { type: 'multiple-choice', name: 'Interactive Question', icon: Layers },
   { type: 'fill-in-the-blank', name: 'Fill the Blank', icon: Edit3 },
-];
-
-const BUTTON_TEMPLATES = [
-  { id: 'next', name: 'Next Page', icon: ChevronRight, action: 'next-scene', color: '#10b981' },
-  { id: 'back', name: 'Prev Page', icon: ChevronLeft, action: 'previous-scene', color: '#64748b' },
-  { id: 'submit', name: 'Submit Test', icon: Star, action: 'submit-test', color: '#8b5cf6' },
+  { type: 'sequencing', name: 'Ordering', icon: ListOrdered },
 ];
 
 const INITIAL_SCENE: Scene = {
@@ -579,9 +548,181 @@ const FillInTheBlankRenderer = ({
   );
 };
 
+// --- Sequencing Renderer ---
+const SequencingRenderer = ({ 
+  element, 
+  isPlaying, 
+  onComplete,
+  onUpdateChoice 
+}: { 
+  element: GameElement; 
+  isPlaying: boolean; 
+  onComplete?: (score: number, max: number) => void;
+  onUpdateChoice?: (choiceId: string, updates: Partial<Choice>) => void;
+}) => {
+  const [selectedOrder, setSelectedOrder] = useState<string[]>([]);
+  const [manualValues, setManualValues] = useState<Record<string, string>>({});
+  const [isAnswered, setIsAnswered] = useState(false);
+  const mode = element.style.orderingMode || 'auto';
+  const layout = element.style.layoutMode || 'grid';
 
-// Sequencing logic removed completely
+  const choices = element.choices || [];
+  
+  // Sort choices by orderIndex for checking if not auto-calculating
+  const sortedChoices = [...choices].sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
 
+  const handleChoiceClick = (id: string) => {
+    if (!isPlaying || isAnswered || mode === 'manual') return;
+    
+    if (selectedOrder.includes(id)) {
+      setSelectedOrder(prev => prev.filter(i => i !== id));
+    } else {
+      setSelectedOrder(prev => [...prev, id]);
+    }
+  };
+
+  const handleCheck = () => {
+    if (!isPlaying || isAnswered) return;
+    
+    let score = 0;
+    if (mode === 'auto') {
+      score = selectedOrder.length === choices.length && selectedOrder.every((id, idx) => id === sortedChoices[idx].id) ? 1 : 0;
+    } else {
+      score = choices.every((c) => {
+        const expectedOrder = (c.orderIndex !== undefined ? c.orderIndex : choices.indexOf(c) + 1).toString();
+        return manualValues[c.id] === expectedOrder;
+      }) ? 1 : 0;
+    }
+
+    setIsAnswered(true);
+    onComplete?.(score, 1);
+  };
+
+  return (
+    <div 
+      className={`w-full h-full p-6 relative overflow-hidden backdrop-blur-sm ${layout === 'free' ? '' : 'flex flex-col items-center justify-center'}`}
+      style={{
+        backgroundColor: element.style.backgroundColor,
+        borderRadius: element.style.borderRadius,
+      }}
+    >
+      <h3 
+        className={`mb-6 whitespace-pre-wrap ${layout === 'free' ? 'absolute top-4 left-4 z-10' : 'text-center'}`}
+        style={{
+          fontSize: element.style.fontSize || '18px',
+          fontWeight: element.style.fontWeight || '700',
+          fontFamily: element.style.fontFamily || 'inherit',
+          fontStyle: element.style.fontStyle || 'normal',
+          fontVariant: element.style.fontVariant || 'normal',
+          textDecoration: element.style.textDecoration || 'none',
+          textTransform: element.style.textTransform || 'none',
+          color: element.style.color || '#1f2937'
+        }}
+      >
+        {element.content}
+      </h3>
+      
+      <div className={layout === 'free' ? 'w-full h-full relative mt-10' : 'flex flex-wrap gap-4 justify-center items-center'}>
+        {choices.map((choice, idx) => {
+          const itemOrder = selectedOrder.indexOf(choice.id);
+          const isCorrect = mode === 'auto' 
+            ? itemOrder === sortedChoices.indexOf(choice)
+            : manualValues[choice.id] === (choice.orderIndex !== undefined ? choice.orderIndex : choices.indexOf(choice) + 1).toString();
+
+          return (
+            <motion.div 
+              key={choice.id} 
+              drag={!isPlaying && layout === 'free'}
+              dragMomentum={false}
+              onDragEnd={(_, info) => {
+                if (onUpdateChoice) {
+                  const snap = 10;
+                  const newX = (choice.x || 0) + info.offset.x;
+                  const newY = (choice.y || 0) + info.offset.y;
+                  onUpdateChoice(choice.id, {
+                    x: Math.round(newX / snap) * snap,
+                    y: Math.round(newY / snap) * snap
+                  });
+                }
+              }}
+              className={`relative flex flex-col items-center gap-2 ${layout === 'free' ? 'absolute cursor-move' : ''}`}
+              style={layout === 'free' ? { left: choice.x || 0, top: choice.y || 0 } : {}}
+            >
+              <motion.div
+                onClick={() => handleChoiceClick(choice.id)}
+                whileHover={isPlaying && !isAnswered && mode === 'auto' ? { scale: 1.05 } : {}}
+                className={`
+                  rounded-xl border-2 flex items-center justify-center bg-white shadow-sm transition-all overflow-hidden
+                  ${selectedOrder.includes(choice.id) ? 'border-brand-primary ring-2 ring-brand-primary/20' : 'border-gray-100'}
+                  ${isAnswered ? (isCorrect ? 'border-green-500 bg-green-50' : 'border-red-500 bg-red-50') : ''}
+                `}
+                style={{
+                  width: choice.width || element.style.choiceWidth || element.style.itemWidth || (choice.type === 'image' ? 140 : 'auto'),
+                  height: choice.height || element.style.choiceHeight || element.style.itemHeight || (choice.type === 'image' ? 140 : 'auto'),
+                  maxWidth: layout === 'free' ? '300px' : '200px',
+                  minWidth: element.style.choiceWidth || element.style.itemWidth || (choice.type === 'text' ? '120px' : 'none'),
+                  minHeight: element.style.choiceHeight || element.style.itemHeight || '48px',
+                  padding: element.style.itemPadding !== undefined ? `${element.style.itemPadding}px` : (choice.type === 'text' ? '16px' : '0')
+                }}
+              >
+                {choice.type === 'image' && choice.src ? (
+                  <img src={choice.src} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                ) : choice.type === 'icon' ? (
+                  <span className="text-3xl">{choice.content}</span>
+                ) : (
+                  <span 
+                    className="text-center leading-tight break-words px-2"
+                    style={{
+                      fontSize: element.style.fontSize || '14px',
+                      fontWeight: element.style.fontWeight || '700',
+                      fontFamily: element.style.fontFamily || 'inherit',
+                      fontStyle: element.style.fontStyle || 'normal',
+                      fontVariant: element.style.fontVariant || 'normal',
+                      textDecoration: element.style.textDecoration || 'none',
+                      textTransform: element.style.textTransform || 'none',
+                      color: element.style.color || 'inherit'
+                    }}
+                  >
+                    {choice.content}
+                  </span>
+                )}
+
+                {/* Index Overlay for Auto Mode */}
+                {mode === 'auto' && selectedOrder.includes(choice.id) && (
+                  <div className="absolute -top-2 -right-2 w-7 h-7 bg-brand-primary text-white rounded-full flex items-center justify-center font-black text-[10px] border-2 border-white shadow-lg z-20">
+                    {itemOrder + 1}
+                  </div>
+                )}
+              </motion.div>
+
+              {/* Input Box for Manual Mode */}
+              {mode === 'manual' && (
+                <input
+                  type="text"
+                  maxLength={2}
+                  disabled={isAnswered}
+                  value={manualValues[choice.id] || ''}
+                  onChange={(e) => setManualValues(prev => ({ ...prev, [choice.id]: e.target.value }))}
+                  placeholder="#"
+                  className={`w-10 h-10 text-center border-2 rounded-xl font-black focus:border-brand-primary outline-none transition-all shadow-sm ${isAnswered ? (isCorrect ? 'border-green-500 bg-green-50 text-green-600' : 'border-red-500 bg-red-50 text-red-600') : 'border-gray-100 bg-white'}`}
+                />
+              )}
+            </motion.div>
+          );
+        })}
+      </div>
+
+      {isPlaying && !isAnswered && (
+        <button 
+          onClick={handleCheck}
+          className={`${layout === 'free' ? 'absolute bottom-4 right-4' : 'mt-8'} px-8 py-3 bg-brand-primary text-white rounded-full font-black shadow-xl hover:scale-105 active:scale-95 transition-all text-sm uppercase tracking-widest`}
+        >
+          Check Sequence
+        </button>
+      )}
+    </div>
+  );
+};
 
 // --- Checkbox Renderer ---
 const CheckboxRenderer = ({ element, isPlaying }: { element: GameElement, isPlaying: boolean }) => {
@@ -1285,171 +1426,12 @@ const TransformTool = ({
   );
 };
 
-// --- View Components ---
-
-const LoginPanel = ({ onLogin }: { onLogin: () => void }) => {
-  return (
-    <div className="min-h-screen bg-[#f8fafc] flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="max-w-md w-full bg-white rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.1)] border border-gray-100 p-10 text-center"
-      >
-        <div className="w-20 h-20 bg-brand-primary rounded-3xl flex items-center justify-center text-white shadow-xl mx-auto mb-8 rotate-6">
-          <Rocket size={40} strokeWidth={2.5} />
-        </div>
-        <h1 className="text-3xl font-black text-gray-900 mb-2 tracking-tight">Kiddie Creator Pro</h1>
-        <p className="text-gray-400 font-bold text-sm uppercase tracking-[0.2em] mb-10">The ultimate test builder</p>
-        
-        <div className="space-y-4">
-          <button 
-            onClick={onLogin}
-            className="w-full h-16 bg-[#1a1a1a] text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-black hover:scale-[1.02] active:scale-98 transition-all flex items-center justify-center gap-4 shadow-xl"
-          >
-            <LogIn size={20} />
-            Sign in with Google
-          </button>
-          <p className="text-[10px] text-gray-400 font-medium px-4 leading-relaxed">
-            Create, save, and share your interactive educational tests with the world.
-          </p>
-        </div>
-      </motion.div>
-    </div>
-  );
-};
-
-const Dashboard = ({ 
-  user, 
-  projects, 
-  onLogout, 
-  onCreateProject, 
-  onLoadProject, 
-  onDeleteProject 
-}: { 
-  user: User, 
-  projects: Project[], 
-  onLogout: () => void, 
-  onCreateProject: () => void, 
-  onLoadProject: (p: Project) => void,
-  onDeleteProject: (id: string) => void
-}) => {
-  return (
-    <div className="min-h-screen bg-[#f8fafc] flex flex-col">
-      {/* Navbar */}
-      <header className="h-20 bg-white border-b border-gray-100 flex items-center justify-between px-8 sticky top-0 z-50">
-        <div className="flex items-center gap-4">
-          <div className="w-10 h-10 bg-brand-primary rounded-xl flex items-center justify-center text-white shadow-lg">
-            <Rocket size={20} />
-          </div>
-          <div>
-            <h1 className="text-lg font-black text-gray-900 tracking-tight leading-none">Dashboard</h1>
-            <span className="text-[10px] font-black text-brand-primary uppercase tracking-widest">{user.displayName || user.email}</span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-6">
-          <button 
-            onClick={onLogout}
-            className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest hover:text-red-500 transition-colors"
-          >
-            <LogOut size={16} />
-            Sign Out
-          </button>
-          <div className="w-10 h-10 rounded-full bg-gray-100 border-2 border-white shadow-sm overflow-hidden">
-            {user.photoURL ? (
-              <img src={user.photoURL} alt="" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-400">
-                <UserIcon size={20} />
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      <main className="flex-1 max-w-7xl w-full mx-auto p-10">
-        <div className="flex items-center justify-between mb-12">
-          <div>
-            <h2 className="text-3xl font-black text-gray-900 tracking-tight mb-2">My Projects</h2>
-            <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Manage your collection of interactive tests</p>
-          </div>
-          <button 
-            onClick={onCreateProject}
-            className="h-14 px-8 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 active:scale-95 transition-all flex items-center gap-3 shadow-[0_10px_25px_rgba(251,113,133,0.3)]"
-          >
-            <PlusCircle size={20} />
-            Create New Test
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
-          {projects.length === 0 ? (
-            <div className="col-span-full py-20 text-center border-4 border-dashed border-gray-100 rounded-[3rem]">
-              <div className="w-20 h-20 bg-gray-50 text-gray-300 rounded-3xl flex items-center justify-center mx-auto mb-6">
-                <FolderOpen size={40} />
-              </div>
-              <h3 className="text-xl font-black text-gray-400 mb-2">No projects yet!</h3>
-              <p className="text-gray-300 text-sm font-bold">Time to spark some creativity and build your first game.</p>
-            </div>
-          ) : (
-            projects.map(project => (
-              <motion.div 
-                key={project.id}
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="group bg-white rounded-[2rem] border border-gray-100 p-2 shadow-sm hover:shadow-[0_20px_50px_rgba(0,0,0,0.05)] hover:border-brand-primary/20 transition-all cursor-pointer relative"
-                onClick={() => onLoadProject(project)}
-              >
-                <div className="aspect-[4/3] bg-gray-50 rounded-[1.5rem] mb-4 flex items-center justify-center relative overflow-hidden">
-                   {project.scenes[0]?.background.image ? (
-                     <img src={project.scenes[0].background.image} className="w-full h-full object-cover opacity-50" referrerPolicy="no-referrer" />
-                   ) : (
-                     <Layout size={40} className="text-gray-200" />
-                   )}
-                   <div className="absolute inset-0 bg-gradient-to-t from-gray-900/10 to-transparent group-hover:bg-brand-primary/10 transition-colors" />
-                   <div className="absolute top-4 right-4 flex gap-2 translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all">
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (confirm('Delete this project?')) onDeleteProject(project.id);
-                        }}
-                        className="w-10 h-10 bg-white shadow-lg rounded-xl flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                   </div>
-                </div>
-                <div className="p-4">
-                  <h3 className="font-black text-gray-900 truncate mb-1">{project.name}</h3>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 text-[10px] font-black text-gray-300 uppercase tracking-widest">
-                       <Clock size={12} />
-                       {new Date(project.updatedAt?.seconds * 1000 || Date.now()).toLocaleDateString()}
-                    </div>
-                    <div className="px-2.5 py-1 bg-gray-100 text-gray-400 rounded-lg text-[9px] font-black uppercase tracking-tight">
-                       {project.scenes.length} Scenes
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            ))
-          )}
-        </div>
-      </main>
-    </div>
-  );
-};
-
 const FAMOUS_FONTS = [
   'Inter', 'Roboto', 'Open Sans', 'Lato', 'Montserrat', 'Playfair Display', 
   'Merriweather', 'Space Grotesk', 'Comic Sans MS', 'Arial', 'Times New Roman', 'Courier New'
 ];
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [currentView, setCurrentView] = useState<'login' | 'dashboard' | 'editor' | 'loading'>('loading');
-  const [userProjects, setUserProjects] = useState<Project[]>([]);
-  
   const [state, setState] = useState<EditorState>({
     scenes: [INITIAL_SCENE],
     currentSceneId: 'scene-1',
@@ -1458,107 +1440,33 @@ export default function App() {
     zoom: 1,
     viewMode: 'desktop',
     isPlaying: false,
-    projectName: 'Untitled Test',
   });
 
   const [history, setHistory] = useState<EditorState[]>([]);
   const [redoStack, setRedoStack] = useState<EditorState[]>([]);
+  const [gameTime, setGameTime] = useState(0);
   const [showResults, setShowResults] = useState(false);
   const [totalScores, setTotalScores] = useState<{sceneId: string, score: number, max: number}[]>([]);
   const [uploadTargetId, setUploadTargetId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // --- Auth & Firestore Hooks ---
+  // Timer logic
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
-      if (user) {
-        setCurrentView('dashboard');
-      } else {
-        setCurrentView('login');
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (!currentUser) return;
-    const q = query(
-      collection(db, 'projects'), 
-      where('ownerId', '==', currentUser.uid),
-      orderBy('updatedAt', 'desc')
-    );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project));
-      setUserProjects(projects);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'projects');
-    });
-    return () => unsubscribe();
-  }, [currentUser]);
-
-  const handleCreateProject = async () => {
-    if (!currentUser) return;
-    try {
-      const projectData = {
-        name: 'My Awesome Test',
-        scenes: [INITIAL_SCENE],
-        ownerId: currentUser.uid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
-      const docRef = await addDoc(collection(db, 'projects'), projectData);
-      handleLoadProject({ id: docRef.id, ...projectData } as Project);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'projects');
+    let interval: any;
+    if (state.isPlaying && !showResults) {
+      interval = setInterval(() => {
+        setGameTime(prev => prev + 1);
+      }, 1000);
+    } else if (!state.isPlaying) {
+      setGameTime(0);
     }
-  };
+    return () => clearInterval(interval);
+  }, [state.isPlaying, showResults]);
 
-  const handleSaveProject = async () => {
-    if (!currentUser || !state.projectId) return;
-    try {
-      const projectRef = doc(db, 'projects', state.projectId);
-      await setDoc(projectRef, {
-        name: state.projectName,
-        scenes: state.scenes,
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `projects/${state.projectId}`);
-    }
-  };
-
-  const handleLoadProject = (project: Project) => {
-    setState({
-      scenes: project.scenes,
-      currentSceneId: project.scenes[0].id,
-      selectedElementId: null,
-      editingElementId: null,
-      zoom: 1,
-      viewMode: 'desktop',
-      isPlaying: false,
-      projectId: project.id,
-      projectName: project.name,
-    });
-    setHistory([]);
-    setRedoStack([]);
-    setCurrentView('editor');
-  };
-
-  const handleDeleteProject = async (projectId: string) => {
-    try {
-      await deleteDoc(doc(db, 'projects', projectId));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `projects/${projectId}`);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error("Logout error", error);
-    }
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   // Wrap state updates with history tracking
@@ -1566,24 +1474,7 @@ export default function App() {
     setHistory(prev => [...prev, state].slice(-50)); // Keep last 50 steps
     setRedoStack([]); // Clear redo stack on new action
     setState(newState);
-    
-    // Auto-save on significant changes if we aren't playing
-    if (!newState.isPlaying && state.projectId) {
-       // Using a small timeout or debouncing would be better in a real app, 
-       // but for simplicity we'll just trigger it.
-       // handleSaveProject(); // We'll trigger save manually or via periodic effect
-    }
   }, [state]);
-
-  // Periodic Auto-save
-  useEffect(() => {
-    if (state.projectId && !state.isPlaying && currentView === 'editor') {
-      const timer = setTimeout(() => {
-        handleSaveProject();
-      }, 5000); // Auto-save every 5 seconds of inactivity
-      return () => clearTimeout(timer);
-    }
-  }, [state.scenes, state.projectName, state.projectId, state.isPlaying, currentView]);
 
   const handleUndo = useCallback(() => {
     if (history.length === 0) return;
@@ -1694,17 +1585,21 @@ export default function App() {
       newElement.blanks = [
         { id: `b-${Date.now()}`, answer: 'everything', placeholder: 'Type here...' }
       ];
-    } else if (type === 'button') {
-      const template = BUTTON_TEMPLATES.find(t => t.id === icon);
-      if (template) {
-        newElement.name = template.name;
-        newElement.content = template.name;
-        newElement.style.backgroundColor = template.color;
-        newElement.interactions = [{
-          type: 'click',
-          action: template.action as any
-        }];
-      }
+    } else if (type === 'sequencing') {
+      newElement.width = 600;
+      newElement.height = 350;
+      newElement.content = 'Put these in order:';
+      newElement.style = {
+        ...newElement.style,
+        backgroundColor: '#ffffff',
+        borderRadius: '24px',
+        orderingMode: 'auto',
+      };
+      newElement.choices = [
+        { id: `c-${Date.now()}-1`, type: 'icon', content: '🥚', isCorrect: true },
+        { id: `c-${Date.now()}-2`, type: 'icon', content: '🐣', isCorrect: true },
+        { id: `c-${Date.now()}-3`, type: 'icon', content: '🐥', isCorrect: true },
+      ];
     } else if (type === 'checkbox') {
       newElement.width = 150;
       newElement.height = 40;
@@ -1957,39 +1852,24 @@ export default function App() {
     setShowResults(false);
     setState(p => ({ ...p, currentSceneId: state.scenes[0].id, isPlaying: true }));
   };
+  const [user, setUser] = useState(auth.currentUser);
+
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged((u) => {
+      setUser(u);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleLogin = async () => {
+    try {
+      const u = await signInWithGoogle();
+      setUser(u);
+    } catch (error) {
+      console.error("Login failed", error);
+    }
+  };
   const currentSceneIndex = state.scenes.findIndex(s => s.id === state.currentSceneId);
-
-  if (currentView === 'loading') {
-    return (
-      <div className="min-h-screen bg-[#f8fafc] flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <motion.div 
-            animate={{ rotate: 360 }}
-            transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-            className="w-12 h-12 border-4 border-brand-primary border-t-transparent rounded-full"
-          />
-          <span className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Crafting Magic...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (currentView === 'login') {
-    return <LoginPanel onLogin={signInWithGoogle} />;
-  }
-
-  if (currentView === 'dashboard') {
-    return (
-      <Dashboard 
-        user={currentUser!} 
-        projects={userProjects} 
-        onLogout={handleLogout}
-        onCreateProject={handleCreateProject}
-        onLoadProject={handleLoadProject}
-        onDeleteProject={handleDeleteProject}
-      />
-    );
-  }
 
   return (
     <div className={`flex flex-col h-screen overflow-hidden text-gray-800 ${state.isPlaying ? 'bg-black' : 'bg-gray-100'}`}>
@@ -1997,24 +1877,11 @@ export default function App() {
       {!state.isPlaying && (
         <nav className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4 z-50">
           <div className="flex items-center gap-3">
-            <button 
-              onClick={() => setCurrentView('dashboard')}
-              className="w-10 h-10 bg-gray-50 hover:bg-gray-100 rounded-xl flex items-center justify-center text-gray-400 group transition-all"
-            >
-              <ArrowLeftRight size={18} className="group-hover:-translate-x-0.5 transition-transform" />
-            </button>
             <div className="w-8 h-8 bg-brand-primary rounded-lg flex items-center justify-center text-white font-bold shadow-soft">K</div>
-            <div className="flex flex-col min-w-[120px]">
-              <input 
-                type="text"
-                value={state.projectName}
-                onChange={(e) => setState(p => ({ ...p, projectName: e.target.value }))}
-                onBlur={handleSaveProject}
-                className="text-sm font-black leading-tight bg-transparent border-none focus:ring-0 p-0 hover:bg-gray-50 rounded px-1 transition-colors outline-none"
-              />
-              <span className="text-[10px] text-gray-300 font-black uppercase tracking-widest px-1">Pro Editor</span>
+            <div className="flex flex-col">
+              <span className="text-sm font-bold leading-tight">KiddieCreator</span>
+              <span className="text-[10px] text-gray-400 font-medium">V1.4 PRO EDITOR</span>
             </div>
-            
             <div className="ml-4 flex items-center gap-1 bg-gray-100 rounded-full p-1">
               <button 
                 onClick={() => setState(p => ({ ...p, isPlaying: false }))}
@@ -2029,6 +1896,22 @@ export default function App() {
                 <Play size={14} /> Play
               </button>
             </div>
+            
+            {user ? (
+              <div className="ml-2 flex items-center gap-2 bg-gray-100 rounded-full px-3 py-1">
+                <div className="w-5 h-5 bg-brand-secondary rounded-full flex items-center justify-center text-[10px] text-white font-bold">
+                  {user.displayName?.[0] || 'U'}
+                </div>
+                <span className="text-[10px] font-bold text-gray-500 truncate max-w-[100px]">{user.displayName}</span>
+              </div>
+            ) : (
+              <button 
+                onClick={handleLogin}
+                className="ml-2 flex items-center gap-1.5 px-3 py-1 bg-brand-secondary text-white rounded-full text-xs font-bold hover:bg-opacity-90 transition-all"
+              >
+                <LogIn size={14} /> Login
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -2067,11 +1950,8 @@ export default function App() {
               <Redo size={18} />
             </button>
             <div className="h-6 w-px bg-gray-200 mx-2" />
-            <button 
-              onClick={handleSaveProject}
-              className="flex items-center gap-2 px-4 py-1.5 bg-brand-primary hover:bg-opacity-90 text-white rounded-lg text-sm font-bold shadow-md transition-all transform active:scale-95"
-            >
-              <Save size={16} /> Save
+            <button className="flex items-center gap-2 px-4 py-1.5 bg-brand-primary hover:bg-opacity-90 text-white rounded-lg text-sm font-bold shadow-md transition-all transform active:scale-95">
+              <Save size={16} /> Save Project
             </button>
           </div>
         </nav>
@@ -2127,26 +2007,6 @@ export default function App() {
                         >
                           <span className="text-2xl mb-1 group-hover:scale-110 transition-transform">{char.icon}</span>
                           <span className="text-[10px] font-bold text-gray-500 group-hover:text-brand-secondary text-center">{char.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                      <MousePointer2 size={12} className="text-brand-primary" /> Navigation Buttons
-                    </h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      {BUTTON_TEMPLATES.map(btn => (
-                        <button
-                          key={btn.id}
-                          onClick={() => handleAddElement('button', btn.id)}
-                          className="flex items-center gap-2 p-2 rounded-xl border border-gray-100 hover:border-brand-primary hover:bg-red-50 group transition-all"
-                        >
-                          <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-gray-50 group-hover:bg-brand-primary/10 transition-colors">
-                            <btn.icon size={16} className="text-gray-400 group-hover:text-brand-primary" />
-                          </div>
-                          <span className="text-[10px] font-bold text-gray-500 group-hover:text-brand-primary">{btn.name}</span>
                         </button>
                       ))}
                     </div>
@@ -2315,6 +2175,11 @@ export default function App() {
 
                   <div className="flex items-center gap-4">
                     <div className="w-px h-8 bg-gray-200" />
+                    <div className="flex flex-col items-center min-w-[70px]">
+                      <span className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Clock</span>
+                      <span className="text-lg font-mono font-bold text-brand-primary">{formatTime(gameTime)}</span>
+                    </div>
+                    <div className="w-px h-8 bg-gray-200 mx-2" />
                     <button 
                       onClick={() => {
                         const currentId = state.currentSceneId;
@@ -2420,6 +2285,12 @@ export default function App() {
                       color: el.style.color,
                     }}
                   />
+                ) : el.type === 'quiz' ? (
+                  <MatchingPairRenderer 
+                    element={el} 
+                    isPlaying={state.isPlaying} 
+                    onComplete={handleSceneComplete}
+                  />
                 ) : el.type === 'multiple-choice' ? (
                   <MultipleChoiceRenderer 
                     element={el} 
@@ -2432,6 +2303,13 @@ export default function App() {
                     element={el} 
                     isPlaying={state.isPlaying} 
                     onComplete={handleSceneComplete}
+                  />
+                ) : el.type === 'sequencing' ? (
+                  <SequencingRenderer 
+                    element={el} 
+                    isPlaying={state.isPlaying} 
+                    onComplete={handleSceneComplete}
+                    onUpdateChoice={(choiceId, updates) => handleUpdateChoice(el.id, choiceId, updates)}
                   />
                 ) : el.type === 'checkbox' ? (
                   <CheckboxRenderer 
@@ -2522,20 +2400,11 @@ export default function App() {
                       if (state.isPlaying) {
                         const submitAction = el.interactions?.find(i => i.action === 'submit-test');
                         const nextSceneAction = el.interactions?.find(i => i.action === 'next-scene');
-                        const prevSceneAction = el.interactions?.find(i => i.action === 'previous-scene');
-                        const navigateAction = el.interactions?.find(i => i.action === 'navigate');
                         
                         if (submitAction) {
                           setShowResults(true);
-                        } else if (prevSceneAction) {
-                          handlePrevScene();
                         } else if (nextSceneAction) {
                           handleNextScene();
-                        } else if (navigateAction) {
-                          const targetSceneId = navigateAction.payload?.sceneId;
-                          if (targetSceneId) {
-                            setState(p => ({ ...p, currentSceneId: targetSceneId }));
-                          }
                         } else if (currentSceneIndex === state.scenes.length - 1) {
                           setShowResults(true);
                         } else {
@@ -2673,63 +2542,23 @@ export default function App() {
         {!state.isPlaying && (
           <aside className="w-80 bg-white border-l border-gray-200 flex flex-col z-40 overflow-y-auto custom-scrollbar">
           {!selectedElement ? (
-            <div className="flex-1 flex flex-col">
-              {/* Feature Rich Welcome Screen */}
-              <div className="p-8 bg-brand-primary/5 border-b border-brand-primary/10">
-                <div className="w-16 h-16 bg-brand-primary rounded-2xl flex items-center justify-center text-white shadow-lg mb-6 rotate-3">
-                  <Rocket size={32} />
+            <div className="flex-1 flex flex-col p-5">
+              <header className="flex items-center justify-between mb-8 pb-4 border-b border-gray-100">
+                <div className="flex flex-col">
+                  <h2 className="text-xs font-black text-gray-900 uppercase tracking-widest flex items-center gap-2">
+                    <Grid3X3 size={14} className="text-brand-primary" /> Page Settings
+                  </h2>
+                  <span className="text-[9px] text-gray-400 font-bold uppercase tracking-tight">Configuring current page canvas</span>
                 </div>
-                <h2 className="text-xl font-black text-gray-900 leading-tight mb-2 tracking-tight">
-                  Welcome to Your <br/>
-                  <span className="text-brand-primary">Interactive Test Builder</span>
-                </h2>
-                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest leading-relaxed">
-                  Start creating powerful learning experiences in minutes.
-                </p>
-              </div>
+              </header>
 
-              <div className="flex-1 p-6 space-y-8 overflow-y-auto custom-scrollbar">
-                {/* Features List */}
+              <div className="space-y-8">
+                {/* Page Identification */}
                 <section>
-                  <label className="text-[10px] font-black text-brand-primary uppercase tracking-[0.2em] block mb-6">Core Features</label>
-                  <div className="space-y-6">
-                    {[
-                      { icon: Layout, title: 'Dynamic Layouts', desc: 'Drag, drop, and resize anything on the canvas.', color: 'text-blue-500', bg: 'bg-blue-50' },
-                      { icon: Zap, title: 'Rich Components', desc: 'Add text, buttons, shapes, and media.', color: 'text-yellow-500', bg: 'bg-yellow-50' },
-                      { icon: Smile, title: 'Animated Characters', desc: 'Engage users with cute character guides.', color: 'text-teal-500', bg: 'bg-teal-50' },
-                      { icon: MousePointer2, title: 'Smart Interactions', desc: 'Logic for navigation and submissions.', color: 'text-purple-500', bg: 'bg-purple-50' },
-                      { icon: Palette, title: 'Pro Styling', desc: 'Full control over colors and decorations.', color: 'text-pink-500', bg: 'bg-pink-50' },
-                      { icon: Smartphone, title: 'Responsive Design', desc: 'Preview on any device size instantly.', color: 'text-indigo-500', bg: 'bg-indigo-50' },
-                      { icon: Trophy, title: 'Auto Scoring', desc: 'Built-in tracking for user progress.', color: 'text-orange-500', bg: 'bg-orange-50' },
-                      { icon: Play, title: 'One-Click Play', desc: 'Switch from design to test mode instantly.', color: 'text-green-500', bg: 'bg-green-50' },
-                    ].map((feature, i) => (
-                      <div key={i} className="flex gap-4 group">
-                        <div className={`shrink-0 w-10 h-10 ${feature.bg} ${feature.color} rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform shadow-sm`}>
-                          <feature.icon size={20} />
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-black text-gray-800 mb-0.5">{feature.title}</h4>
-                          <p className="text-[10px] text-gray-400 font-medium leading-relaxed">{feature.desc}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-
-                <div className="h-px bg-gray-100" />
-
-                {/* Page Level Settings - Keep but make secondary */}
-                <section>
-                  <div className="flex items-center gap-2 mb-6">
-                    <div className="w-6 h-6 bg-gray-100 rounded flex items-center justify-center">
-                      <Settings2 size={12} className="text-gray-400" />
-                    </div>
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block">Page Canvas Config</label>
-                  </div>
-                  
-                  <div className="space-y-6">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-3">General Info</label>
+                  <div className="space-y-4">
                     <div className="space-y-1.5">
-                      <span className="text-[10px] text-gray-500 font-black block uppercase tracking-tight">Active Page Title</span>
+                      <span className="text-[10px] text-gray-500 font-bold block">Page Name</span>
                       <input 
                         type="text"
                         value={currentScene.name}
@@ -2740,39 +2569,15 @@ export default function App() {
                             scenes: state.scenes.map(s => s.id === state.currentSceneId ? { ...s, name } : s)
                           });
                         }}
-                        className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:bg-white transition-all"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
                         placeholder="Scene Name..."
                       />
                     </div>
-
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] text-gray-500 font-black block uppercase tracking-tight">Atmosphere Color</span>
-                      <div className="flex gap-2">
-                        <input 
-                          type="color"
-                          value={currentScene.background.color}
-                          onChange={(e) => {
-                            const color = e.target.value;
-                            pushToHistory({
-                              ...state,
-                              scenes: state.scenes.map(s => s.id === state.currentSceneId ? { ...s, background: { ...s.background, color } } : s)
-                            });
-                          }}
-                          className="w-12 h-10 bg-gray-50 border border-gray-100 rounded-xl px-1 py-1 cursor-pointer shrink-0"
-                        />
-                        <input 
-                          type="text"
-                          value={currentScene.background.color}
-                          readOnly
-                          className="flex-1 bg-gray-50 border border-gray-100 rounded-xl px-4 py-2.5 text-[10px] font-mono text-gray-400"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between p-3.5 bg-gray-50 border border-gray-100 rounded-xl">
+                    
+                    <div className="flex items-center justify-between p-3 bg-brand-primary/[0.03] border border-brand-primary/10 rounded-xl">
                       <div className="flex flex-col">
-                        <span className="text-[10px] font-black text-gray-700 uppercase tracking-tight">Submission Page</span>
-                        <span className="text-[9px] text-gray-400 font-medium leading-tight mt-0.5">Show results after this view</span>
+                        <span className="text-[10px] font-black text-brand-primary uppercase tracking-tight">Final Page</span>
+                        <span className="text-[9px] text-gray-400 font-medium whitespace-pre-wrap">Treat as completion screen</span>
                       </div>
                       <button 
                         onClick={() => {
@@ -2789,13 +2594,48 @@ export default function App() {
                   </div>
                 </section>
 
-                {/* Engagement Tip */}
-                <div className="p-4 bg-teal-50 rounded-2xl border border-teal-100 flex gap-3">
-                  <Sparkles size={16} className="text-teal-500 shrink-0" />
-                  <p className="text-[9px] text-teal-800 font-bold leading-relaxed">
-                    Pro Tip: Use interactive buttons with "Submit Test" action to let users finalize their work.
-                  </p>
-                </div>
+                {/* Background Styling */}
+                <section>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-3">Atmosphere</label>
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center px-1">
+                        <span className="text-[10px] text-gray-500 font-bold block">Background Color</span>
+                        <span className="text-[9px] font-mono text-gray-400">{currentScene.background.color}</span>
+                      </div>
+                      <input 
+                        type="color"
+                        value={currentScene.background.color}
+                        onChange={(e) => {
+                          const color = e.target.value;
+                          pushToHistory({
+                            ...state,
+                            scenes: state.scenes.map(s => s.id === state.currentSceneId ? { ...s, background: { ...s.background, color } } : s)
+                          });
+                        }}
+                        className="w-full h-10 bg-gray-50 border border-gray-200 rounded-xl px-1 py-1 cursor-pointer"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] text-gray-500 font-bold block">Background Image URL</span>
+                      <input 
+                        type="text"
+                        value={currentScene.background.image || ''}
+                        onChange={(e) => {
+                          const image = e.target.value;
+                          pushToHistory({
+                            ...state,
+                            scenes: state.scenes.map(s => s.id === state.currentSceneId ? { ...s, background: { ...s.background, image } } : s)
+                          });
+                        }}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-[10px] font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
+                        placeholder="https://..."
+                      />
+                      <p className="text-[9px] text-gray-400 font-medium italic mt-1 px-1 line-clamp-2">Use high-quality PNG or JPG for backgrounds</p>
+                    </div>
+                  </div>
+                </section>
               </div>
             </div>
           ) : (
